@@ -29,7 +29,8 @@ struct Snake {
     int dy;
 };
 
-#if defined(__x86_64__) #if defined(__x86_64__) && (defined(__linux__) || defined(__unix__))#if defined(__x86_64__) && (defined(__linux__) || defined(__unix__)) (defined(__linux__) || defined(__unix__)) && !defined(__ANDROID__)
+// Чистое условие: на ПК под Linux используется ASM, на Android — C++ ядро
+#if defined(__x86_64__) && (defined(__linux__) || defined(__unix__)) && !defined(__ANDROID__)
 extern "C" int snake_step_asm(Snake* s, int max_w, int max_h, int grow);
 #define DISNAKECTOR_CORE_STEP snake_step_asm
 #else
@@ -94,15 +95,12 @@ struct ActiveSFX {
 
 struct AudioMixer {
     float sfx_volume = 0.8f;
-    float music_volume = 0.0f; // По умолчанию на нуле до решения игрока
-
+    float music_volume = 0.0f;
     Uint8* music_data = nullptr;
     Uint32 music_len = 0;
     Uint32 music_pos = 0;
     bool has_music = false;
-
     int current_track = 1;
-
     std::vector<ActiveSFX> sfx_channels;
     SDL_AudioDeviceID dev = 0;
     SDL_AudioSpec have_spec{};
@@ -112,7 +110,6 @@ static AudioMixer g_mixer;
 
 void load_track_file(int track_num) {
     if (g_mixer.dev > 0) SDL_LockAudioDevice(g_mixer.dev);
-
     if (g_mixer.music_data) {
         std::free(g_mixer.music_data);
         g_mixer.music_data = nullptr;
@@ -136,7 +133,6 @@ void load_track_file(int track_num) {
             std::memcpy(cvt.buf, wav_buf, wav_len);
             SDL_ConvertAudio(&cvt);
             SDL_FreeWAV(wav_buf);
-
             g_mixer.music_data = cvt.buf;
             g_mixer.music_len = cvt.len_cvt;
             g_mixer.has_music = true;
@@ -144,7 +140,6 @@ void load_track_file(int track_num) {
             SDL_FreeWAV(wav_buf);
         }
     }
-
     if (g_mixer.dev > 0) SDL_UnlockAudioDevice(g_mixer.dev);
 }
 
@@ -455,9 +450,6 @@ void draw_speech_bubble(SDL_Renderer* ren, int bx, int by, int bw, int bh, const
     draw_text(ren, text, bx + 16, by + (bh - 16) / 2, 2, { 255, 255, 255, 255 }, true);
 }
 
-// =============================================================================
-// Чистый, стильный логотип DISNAKECTOR
-// =============================================================================
 void draw_clean_pro_logo(SDL_Renderer* ren, int center_x, int top_y, uint32_t now) {
     std::string title = "DISNAKECTOR";
     int text_w = get_text_width(title, 4);
@@ -467,35 +459,27 @@ void draw_clean_pro_logo(SDL_Renderer* ren, int center_x, int top_y, uint32_t no
     int plate_x = center_x - plate_w / 2;
     int plate_y = top_y;
 
-    // Плавное неоновое дыхание контура
     float pulse = (std::sin(now * 0.005f) + 1.0f) * 0.5f;
     uint8_t border_glow = static_cast<uint8_t>(170 + pulse * 85);
 
-    // Подложка
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(ren, 14, 20, 30, 240);
     SDL_Rect plate{ plate_x, plate_y, plate_w, plate_h };
     SDL_RenderFillRect(ren, &plate);
 
-    // Пульсирующая неоновая рамка
     SDL_SetRenderDrawColor(ren, 0, border_glow, 255, 255);
     SDL_RenderDrawRect(ren, &plate);
 
-    // Боковые энерго-стрелы
     int arrow_len = 30;
     SDL_SetRenderDrawColor(ren, 43, 216, 87, 255);
     SDL_RenderDrawLine(ren, plate_x - 10, plate_y + plate_h / 2, plate_x - 10 - arrow_len, plate_y + plate_h / 2);
     SDL_RenderDrawLine(ren, plate_x + plate_w + 10, plate_y + plate_h / 2, plate_x + plate_w + 10 + arrow_len, plate_y + plate_h / 2);
 
-    // 3D-текст логотипа
     int tx = center_x - text_w / 2;
-    draw_text(ren, title, tx + 3, plate_y + 14, 4, { 5, 10, 16, 255 }, false); // Тень
-    draw_text(ren, title, tx, plate_y + 11, 4, { 43, 225, 95, 255 }, false);   // Яркий изумруд
+    draw_text(ren, title, tx + 3, plate_y + 14, 4, { 5, 10, 16, 255 }, false);
+    draw_text(ren, title, tx, plate_y + 11, 4, { 43, 225, 95, 255 }, false);
 }
 
-// =============================================================================
-// Сенсорные стрелочки управления (Touch D-Pad)
-// =============================================================================
 struct TouchButton {
     SDL_Rect rect;
     std::string label;
@@ -546,6 +530,7 @@ static void spawn_apple(Apple& apple, const Snake& snake, std::mt19937& rng) {
 
 int main(int argc, char* argv[]) {
     (void)argc; (void)argv;
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         std::cerr << "[FATAL] SDL_Init: " << SDL_GetError() << "\n";
         return 1;
@@ -587,18 +572,10 @@ int main(int argc, char* argv[]) {
     int initial_speed = 95;
     int tick_rate = initial_speed;
 
-    #if defined(__ANDROID__)
-    bool touch_controls_enabled = true;
-#else
-    #if defined(__ANDROID__)
-    bool touch_controls_enabled = true;
-#else
-    #if defined(__ANDROID__)
+#if defined(__ANDROID__)
     bool touch_controls_enabled = true;
 #else
     bool touch_controls_enabled = false;
-#endif
-#endif
 #endif
 
     auto reset_game = [&]() {
@@ -624,10 +601,9 @@ int main(int argc, char* argv[]) {
     spawn_apple(apple, snake, rng);
 
     std::vector<Particle> particles;
-    GameState state = GameState::AUDIO_PROMPT; // Вежливый старт с вопросом о музыке
+    GameState state = GameState::AUDIO_PROMPT;
     bool running = true;
 
-    // Кнопки стартового окна музыки
     Button btn_music_yes { { 260, 270, 120, 50 }, "ДА" };
     Button btn_music_no  { { 420, 270, 120, 50 }, "НЕТ" };
 
@@ -901,12 +877,11 @@ int main(int argc, char* argv[]) {
         SDL_SetRenderDrawColor(renderer, 10, 14, 20, 255);
         SDL_RenderClear(renderer);
 
-        // Кибер-сетка
         SDL_SetRenderDrawColor(renderer, 18, 24, 34, 255);
         for (int x = 0; x < SCREEN_WIDTH; x += CELL_SIZE) SDL_RenderDrawLine(renderer, x, 0, x, SCREEN_HEIGHT);
         for (int y = 0; y < SCREEN_HEIGHT; y += CELL_SIZE) SDL_RenderDrawLine(renderer, 0, y, SCREEN_WIDTH, y);
 
-        // Глянцевое яблоко
+        // Яблоко
         int ax = apple.x * CELL_SIZE;
         int ay = apple.y * CELL_SIZE;
         SDL_Rect apple_base{ ax + 4, ay + 6, CELL_SIZE - 8, CELL_SIZE - 10 };
@@ -925,9 +900,7 @@ int main(int argc, char* argv[]) {
         SDL_RenderDrawPoint(renderer, ax + 8, ay + 9);
         SDL_RenderDrawPoint(renderer, ax + 9, ay + 9);
 
-        // =====================================================================
-        // Сглаженное анатомическое тело змейки
-        // =====================================================================
+        // Сглаженное тело змейки
         std::vector<std::pair<float, float>> seg_centers(snake.length);
         for (int i = 0; i < snake.length; ++i) {
             float rx = prev_x[i] + (snake.x[i] - prev_x[i]) * alpha;
@@ -953,7 +926,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Голова змейки
+        // Голова
         int hx = static_cast<int>(seg_centers[0].first);
         int hy = static_cast<int>(seg_centers[0].second);
         int head_r = 14;
@@ -1002,7 +975,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Частицы
         for (const auto& p : particles) {
             SDL_SetRenderDrawColor(renderer, p.r, p.g, p.b, (uint8_t)(p.life * 255.0f));
             SDL_Rect pr{ (int)p.x, (int)p.y, 3, 3 };
@@ -1028,9 +1000,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // =====================================================================
-        // Стартовый диалог выбора звука
-        // =====================================================================
         if (state == GameState::AUDIO_PROMPT) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(renderer, 6, 8, 14, 245);
@@ -1053,7 +1022,6 @@ int main(int argc, char* argv[]) {
             SDL_Rect full{ 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT };
             SDL_RenderFillRect(renderer, &full);
 
-            // Чистый логотип
             draw_clean_pro_logo(renderer, SCREEN_WIDTH / 2, 75, now);
 
             btn_play.draw(renderer);
