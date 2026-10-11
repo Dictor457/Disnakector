@@ -29,7 +29,6 @@ struct Snake {
     int dy;
 };
 
-// Чистое условие: на ПК под Linux используется ASM, на Android — C++ ядро
 #if defined(__x86_64__) && (defined(__linux__) || defined(__unix__)) && !defined(__ANDROID__)
 extern "C" int snake_step_asm(Snake* s, int max_w, int max_h, int grow);
 #define DISNAKECTOR_CORE_STEP snake_step_asm
@@ -538,12 +537,22 @@ int main(int argc, char* argv[]) {
 
     init_audio();
 
+#if defined(__ANDROID__)
+    // На смартфоне берем настоящий нативный полный экран
+    SDL_Window* window = SDL_CreateWindow(
+        "Disnakector",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        0, 0,
+        SDL_WINDOW_FULLSCREEN | SDL_WINDOW_SHOWN
+    );
+#else
     SDL_Window* window = SDL_CreateWindow(
         "Disnakector",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         SCREEN_WIDTH, SCREEN_HEIGHT,
         SDL_WINDOW_SHOWN
     );
+#endif
 
     SDL_Surface* icon_surf = create_procedural_icon();
     if (icon_surf) {
@@ -555,6 +564,9 @@ int main(int argc, char* argv[]) {
         window, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
     );
+
+    // КЛЮЧЕВАЯ ФУНКЦИЯ: аппаратное растягивание 800x640 на весь 1.5K экран смартфона с сохранением пропорций
+    SDL_RenderSetLogicalSize(renderer, SCREEN_WIDTH, SCREEN_HEIGHT);
 
     std::random_device rd;
     std::mt19937 rng(rd());
@@ -877,6 +889,7 @@ int main(int argc, char* argv[]) {
         SDL_SetRenderDrawColor(renderer, 10, 14, 20, 255);
         SDL_RenderClear(renderer);
 
+        // Кибер-сетка
         SDL_SetRenderDrawColor(renderer, 18, 24, 34, 255);
         for (int x = 0; x < SCREEN_WIDTH; x += CELL_SIZE) SDL_RenderDrawLine(renderer, x, 0, x, SCREEN_HEIGHT);
         for (int y = 0; y < SCREEN_HEIGHT; y += CELL_SIZE) SDL_RenderDrawLine(renderer, 0, y, SCREEN_WIDTH, y);
@@ -975,6 +988,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Частицы
         for (const auto& p : particles) {
             SDL_SetRenderDrawColor(renderer, p.r, p.g, p.b, (uint8_t)(p.life * 255.0f));
             SDL_Rect pr{ (int)p.x, (int)p.y, 3, 3 };
@@ -1075,7 +1089,7 @@ int main(int argc, char* argv[]) {
 
             std::string gov = "GAME OVER";
             int gw = get_text_width(gov, 5);
-            draw_text(renderer, gov, (SCREEN_WIDTH - gw) / 2, 120, 5, { 255, 75, 75, 255 });
+            draw_text(renderer, gov, (SCREEN_WIDTH - gw) / 120, 120, 5, { 255, 75, 75, 255 });
 
             std::string final_score = "FINAL APPLES: " + std::to_string(score);
             int fw = get_text_width(final_score, 2);

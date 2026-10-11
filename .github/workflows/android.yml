@@ -16,6 +16,14 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      - name: Set up Python for Icon Generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Pillow
+        run: pip install pillow
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -28,7 +36,7 @@ jobs:
           ndk-version: r26d
           link-to-sdk: true
 
-      - name: Setup SDL2 Android Project Layout
+      - name: Setup SDL2 Android Project Layout & Custom Icons
         run: |
           git clone --depth 1 --branch release-2.30.8 https://github.com/libsdl-org/SDL.git sdl2-source
           cp -r sdl2-source/android-project android-build
@@ -65,7 +73,6 @@ jobs:
           include $(BUILD_SHARED_LIBRARY)
           MK
 
-          # Сборка строго под 64-битный ARM
           cat << 'APP_MK' > app/jni/Application.mk
           APP_ABI := arm64-v8a
           APP_PLATFORM := android-21
@@ -73,7 +80,6 @@ jobs:
           APP_ALLOW_MISSING_DEPS := true
           APP_MK
 
-          # Ограничиваем сборку в build.gradle только arm64-v8a
           sed -i "s/abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'/abiFilters 'arm64-v8a'/g" app/build.gradle 2>/dev/null || true
 
           mkdir -p app/src/main/res/values
@@ -82,6 +88,32 @@ jobs:
               <string name="app_name">Disnakector</string>
           </resources>
           STRINGS
+
+          # Генерируем крутую неоновую иконку под все разрешения экрана Android
+          python3 - << 'PY'
+          from PIL import Image, ImageDraw
+          import os
+
+          img = Image.new("RGBA", (192, 192), (14, 20, 30, 255))
+          d = ImageDraw.Draw(img)
+          d.rounded_rectangle([6, 6, 186, 186], radius=40, fill=(18, 25, 38, 255), outline=(43, 216, 87, 255), width=7)
+          d.rounded_rectangle([42, 42, 150, 150], radius=24, fill=(43, 216, 87, 255))
+          d.rounded_rectangle([58, 58, 134, 134], radius=16, fill=(30, 160, 70, 255))
+          d.ellipse([64, 76, 88, 108], fill=(255, 205, 30, 255))
+          d.ellipse([104, 76, 128, 108], fill=(255, 205, 30, 255))
+          d.rectangle([74, 80, 78, 104], fill=(10, 15, 25, 255))
+          d.rectangle([114, 80, 118, 104], fill=(10, 15, 25, 255))
+          d.ellipse([70, 82, 74, 86], fill=(255, 255, 255, 255))
+          d.ellipse([110, 82, 114, 86], fill=(255, 255, 255, 255))
+
+          res_map = [("mipmap-mdpi", 48), ("mipmap-hdpi", 72), ("mipmap-xhdpi", 96), ("mipmap-xxhdpi", 144), ("mipmap-xxxhdpi", 192)]
+          for folder, sz in res_map:
+              p = f"app/src/main/res/{folder}"
+              os.makedirs(p, exist_ok=True)
+              scaled = img.resize((sz, sz), Image.Resampling.LANCZOS)
+              scaled.save(f"{p}/ic_launcher.png")
+              scaled.save(f"{p}/ic_launcher_round.png")
+          PY
 
       - name: Build Debug APK with Gradle
         run: |
