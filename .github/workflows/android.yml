@@ -36,7 +36,7 @@ jobs:
           ndk-version: r26d
           link-to-sdk: true
 
-      - name: Setup SDL2 Android Project Layout & Custom Icons
+      - name: Setup SDL2 Android Project Layout & Purge Robot Icons
         run: |
           git clone --depth 1 --branch release-2.30.8 https://github.com/libsdl-org/SDL.git sdl2-source
           cp -r sdl2-source/android-project android-build
@@ -82,6 +82,10 @@ jobs:
 
           sed -i "s/abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'/abiFilters 'arm64-v8a'/g" app/build.gradle 2>/dev/null || true
 
+          # Поднимаем versionCode до 2, чтобы HyperOS гарантированно обновила приложение
+          sed -i 's/versionCode 1/versionCode 2/g' app/build.gradle 2>/dev/null || true
+          sed -i 's/versionName "1.0"/versionName "1.0.1"/g' app/build.gradle 2>/dev/null || true
+
           mkdir -p app/src/main/res/values
           cat << 'STRINGS' > app/src/main/res/values/strings.xml
           <resources>
@@ -89,7 +93,11 @@ jobs:
           </resources>
           STRINGS
 
-          # Генерируем крутую неоновую иконку под все разрешения экрана Android
+          # ВАЖНО: полностью сносим адаптивные иконки anydpi-v26, которые скрывали наш PNG
+          rm -rf app/src/main/res/mipmap-anydpi*
+          rm -rf app/src/main/res/drawable-anydpi*
+
+          # Генерируем сочную кастомную иконку во все папки ресурсов
           python3 - << 'PY'
           from PIL import Image, ImageDraw
           import os

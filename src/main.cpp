@@ -537,22 +537,26 @@ int main(int argc, char* argv[]) {
 
     init_audio();
 
+    int win_w = SCREEN_WIDTH;
+    int win_h = SCREEN_HEIGHT;
+    Uint32 win_flags = SDL_WINDOW_SHOWN;
+
 #if defined(__ANDROID__)
-    // На смартфоне берем настоящий нативный полный экран
-    SDL_Window* window = SDL_CreateWindow(
-        "Disnakector",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        0, 0,
-        SDL_WINDOW_FULLSCREEN | SDL_WINDOW_SHOWN
-    );
-#else
-    SDL_Window* window = SDL_CreateWindow(
-        "Disnakector",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        SCREEN_WIDTH, SCREEN_HEIGHT,
-        SDL_WINDOW_SHOWN
-    );
+    // Запрашиваем настоящий физический размер дисплея телефона
+    SDL_DisplayMode dm;
+    if (SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.w > 0 && dm.h > 0) {
+        win_w = dm.w;
+        win_h = dm.h;
+    }
+    win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 #endif
+
+    SDL_Window* window = SDL_CreateWindow(
+        "Disnakector",
+        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+        win_w, win_h,
+        win_flags
+    );
 
     SDL_Surface* icon_surf = create_procedural_icon();
     if (icon_surf) {
@@ -565,7 +569,7 @@ int main(int argc, char* argv[]) {
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
     );
 
-    // КЛЮЧЕВАЯ ФУНКЦИЯ: аппаратное растягивание 800x640 на весь 1.5K экран смартфона с сохранением пропорций
+    // Аппаратное масштабирование игрового поля на полный экран любого смартфона
     SDL_RenderSetLogicalSize(renderer, SCREEN_WIDTH, SCREEN_HEIGHT);
 
     std::random_device rd;
@@ -889,7 +893,6 @@ int main(int argc, char* argv[]) {
         SDL_SetRenderDrawColor(renderer, 10, 14, 20, 255);
         SDL_RenderClear(renderer);
 
-        // Кибер-сетка
         SDL_SetRenderDrawColor(renderer, 18, 24, 34, 255);
         for (int x = 0; x < SCREEN_WIDTH; x += CELL_SIZE) SDL_RenderDrawLine(renderer, x, 0, x, SCREEN_HEIGHT);
         for (int y = 0; y < SCREEN_HEIGHT; y += CELL_SIZE) SDL_RenderDrawLine(renderer, 0, y, SCREEN_WIDTH, y);
@@ -1089,7 +1092,7 @@ int main(int argc, char* argv[]) {
 
             std::string gov = "GAME OVER";
             int gw = get_text_width(gov, 5);
-            draw_text(renderer, gov, (SCREEN_WIDTH - gw) / 120, 120, 5, { 255, 75, 75, 255 });
+            draw_text(renderer, gov, (SCREEN_WIDTH - gw) / 2, 120, 5, { 255, 75, 75, 255 });
 
             std::string final_score = "FINAL APPLES: " + std::to_string(score);
             int fw = get_text_width(final_score, 2);
