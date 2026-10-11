@@ -590,7 +590,15 @@ int main(int argc, char* argv[]) {
     #if defined(__ANDROID__)
     bool touch_controls_enabled = true;
 #else
+    #if defined(__ANDROID__)
+    bool touch_controls_enabled = true;
+#else
+    #if defined(__ANDROID__)
+    bool touch_controls_enabled = true;
+#else
     bool touch_controls_enabled = false;
+#endif
+#endif
 #endif
 
     auto reset_game = [&]() {

@@ -30,53 +30,49 @@ jobs:
 
       - name: Setup SDL2 Android Project Layout
         run: |
-          # Клонируем исходники SDL2
           git clone --depth 1 --branch release-2.30.8 https://github.com/libsdl-org/SDL.git sdl2-source
-
-          # Создаем структуру Android-проекта
           cp -r sdl2-source/android-project android-build
           cd android-build
 
-          # Задаем пути к SDK и NDK
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           echo "ndk.dir=$ANDROID_NDK_HOME" >> local.properties
 
-          # JNI структура строго по стандарту SDL2: app/jni/
           mkdir -p app/jni/SDL
           cp -r ../sdl2-source/* app/jni/SDL/
+
+          # Создаем структуру <SDL2/SDL.h>
+          mkdir -p app/jni/SDL/include/SDL2
+          cp -r app/jni/SDL/include/*.h app/jni/SDL/include/SDL2/
 
           mkdir -p app/jni/src
           cp ../src/main.cpp app/jni/src/
           cp ../src/font.hpp app/jni/src/
 
-          # Копируем ассеты игры (треки) внутрь APK
           mkdir -p app/src/main/assets/assets
           if [ -d "../assets" ]; then
             cp -r ../assets/* app/src/main/assets/assets/ || true
           fi
 
-          # Конфигурация компилятора под C++20
           cat << 'MK' > app/jni/src/Android.mk
           LOCAL_PATH := $(call my-dir)
           include $(CLEAR_VARS)
           LOCAL_MODULE := main
           SDL_PATH := ../SDL
           LOCAL_C_INCLUDES := $(LOCAL_PATH)/$(SDL_PATH)/include $(LOCAL_PATH)
-          LOCAL_SRC_FILES := main.cpp
+          LOCAL_SRC_FILES := $(SDL_PATH)/src/main/android/SDL_android_main.c main.cpp
           LOCAL_SHARED_LIBRARIES := SDL2
           LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog -landroid
           LOCAL_CPPFLAGS := -std=c++20
           include $(BUILD_SHARED_LIBRARY)
           MK
 
-          # Конфигурация под архитектуру 64-битного ARM Cortex-A725
           cat << 'APP_MK' > app/jni/Application.mk
           APP_ABI := arm64-v8a
           APP_PLATFORM := android-21
           APP_STL := c++_shared
+          APP_ALLOW_MISSING_DEPS := true
           APP_MK
 
-          # Имя игры
           mkdir -p app/src/main/res/values
           cat << 'STRINGS' > app/src/main/res/values/strings.xml
           <resources>
