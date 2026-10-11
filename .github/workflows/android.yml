@@ -40,7 +40,6 @@ jobs:
           mkdir -p app/jni/SDL
           cp -r ../sdl2-source/* app/jni/SDL/
 
-          # Создаем структуру <SDL2/SDL.h>
           mkdir -p app/jni/SDL/include/SDL2
           cp -r app/jni/SDL/include/*.h app/jni/SDL/include/SDL2/
 
@@ -59,19 +58,23 @@ jobs:
           LOCAL_MODULE := main
           SDL_PATH := ../SDL
           LOCAL_C_INCLUDES := $(LOCAL_PATH)/$(SDL_PATH)/include $(LOCAL_PATH)
-          LOCAL_SRC_FILES := $(SDL_PATH)/src/main/android/SDL_android_main.c main.cpp
+          LOCAL_SRC_FILES := main.cpp
           LOCAL_SHARED_LIBRARIES := SDL2
           LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog -landroid
           LOCAL_CPPFLAGS := -std=c++20
           include $(BUILD_SHARED_LIBRARY)
           MK
 
+          # Сборка строго под 64-битный ARM
           cat << 'APP_MK' > app/jni/Application.mk
           APP_ABI := arm64-v8a
           APP_PLATFORM := android-21
           APP_STL := c++_shared
           APP_ALLOW_MISSING_DEPS := true
           APP_MK
+
+          # Ограничиваем сборку в build.gradle только arm64-v8a
+          sed -i "s/abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'/abiFilters 'arm64-v8a'/g" app/build.gradle 2>/dev/null || true
 
           mkdir -p app/src/main/res/values
           cat << 'STRINGS' > app/src/main/res/values/strings.xml

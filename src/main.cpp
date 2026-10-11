@@ -29,7 +29,7 @@ struct Snake {
     int dy;
 };
 
-#if defined(__x86_64__) && (defined(__linux__) || defined(__unix__))
+#if defined(__x86_64__) #if defined(__x86_64__) && (defined(__linux__) || defined(__unix__))#if defined(__x86_64__) && (defined(__linux__) || defined(__unix__)) (defined(__linux__) || defined(__unix__)) && !defined(__ANDROID__)
 extern "C" int snake_step_asm(Snake* s, int max_w, int max_h, int grow);
 #define DISNAKECTOR_CORE_STEP snake_step_asm
 #else
