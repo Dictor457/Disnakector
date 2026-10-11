@@ -28,40 +28,40 @@ jobs:
           ndk-version: r26d
           link-to-sdk: true
 
-      - name: Setup SDL2 Android Project
+      - name: Setup SDL2 Android Project Layout
         run: |
-          # Клонируем стабильный релиз SDL2 напрямую через git
+          # Клонируем исходники SDL2
           git clone --depth 1 --branch release-2.30.8 https://github.com/libsdl-org/SDL.git sdl2-source
 
-          # Создаем структуру Android проекта
+          # Создаем структуру Android-проекта
           cp -r sdl2-source/android-project android-build
           cd android-build
 
-          # Прописываем пути к SDK и NDK для Gradle
+          # Задаем пути к SDK и NDK
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           echo "ndk.dir=$ANDROID_NDK_HOME" >> local.properties
 
-          # Подключаем исходники SDL2
-          mkdir -p app/src/main/jni/SDL
-          cp -r ../sdl2-source/* app/src/main/jni/SDL/
+          # JNI структура строго по стандарту SDL2: app/jni/
+          mkdir -p app/jni/SDL
+          cp -r ../sdl2-source/* app/jni/SDL/
 
-          # Подключаем исходники игры
-          mkdir -p app/src/main/jni/src
-          cp ../src/main.cpp app/src/main/jni/src/
-          cp ../src/font.hpp app/src/main/jni/src/
+          mkdir -p app/jni/src
+          cp ../src/main.cpp app/jni/src/
+          cp ../src/font.hpp app/jni/src/
 
-          # Копируем ассеты игры внутрь APK
+          # Копируем ассеты игры (треки) внутрь APK
           mkdir -p app/src/main/assets/assets
           if [ -d "../assets" ]; then
             cp -r ../assets/* app/src/main/assets/assets/ || true
           fi
 
-          # Конфигурируем Android.mk под C++20
-          cat << 'MK' > app/src/main/jni/src/Android.mk
+          # Конфигурация компилятора под C++20
+          cat << 'MK' > app/jni/src/Android.mk
           LOCAL_PATH := $(call my-dir)
           include $(CLEAR_VARS)
           LOCAL_MODULE := main
-          LOCAL_C_INCLUDES := $(LOCAL_PATH)/../SDL/include $(LOCAL_PATH)
+          SDL_PATH := ../SDL
+          LOCAL_C_INCLUDES := $(LOCAL_PATH)/$(SDL_PATH)/include $(LOCAL_PATH)
           LOCAL_SRC_FILES := main.cpp
           LOCAL_SHARED_LIBRARIES := SDL2
           LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog -landroid
@@ -69,14 +69,14 @@ jobs:
           include $(BUILD_SHARED_LIBRARY)
           MK
 
-          # Конфигурируем сборку строго под 64-битный ARM Cortex-A725
-          cat << 'APP_MK' > app/src/main/jni/Application.mk
+          # Конфигурация под архитектуру 64-битного ARM Cortex-A725
+          cat << 'APP_MK' > app/jni/Application.mk
           APP_ABI := arm64-v8a
           APP_PLATFORM := android-21
           APP_STL := c++_shared
           APP_MK
 
-          # Создаем strings.xml с именем Disnakector
+          # Имя игры
           mkdir -p app/src/main/res/values
           cat << 'STRINGS' > app/src/main/res/values/strings.xml
           <resources>
@@ -88,7 +88,7 @@ jobs:
         run: |
           cd android-build
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug
 
       - name: Copy & Rename APK
         run: |
