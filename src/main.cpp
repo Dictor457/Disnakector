@@ -1,6 +1,7 @@
 #include <SDL2/SDL.h>
 #include <iostream>
 #include <vector>
+#include <deque>
 #include <random>
 #include <cmath>
 #include <cstdint>
@@ -74,6 +75,18 @@ static SDL_Surface* create_procedural_icon() {
     return surface;
 }
 
+void draw_filled_circle(SDL_Renderer* ren, int cx, int cy, int r, SDL_Color col) {
+    if (r <= 0) return;
+    SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, col.a);
+    for (int dy = -r; dy <= r; ++dy) {
+        int dx = static_cast<int>(std::sqrt(r * r - dy * dy));
+        SDL_RenderDrawLine(ren, cx - dx, cy + dy, cx + dx, cy + dy);
+    }
+}
+
+// =============================================================================
+// Аудиомикшер
+// =============================================================================
 struct ActiveSFX {
     std::vector<int16_t> samples;
     size_t cursor = 0;
@@ -81,18 +94,59 @@ struct ActiveSFX {
 
 struct AudioMixer {
     float sfx_volume = 0.8f;
-    float music_volume = 0.5f;
+    float music_volume = 0.0f; // По умолчанию на нуле до решения игрока
 
     Uint8* music_data = nullptr;
     Uint32 music_len = 0;
     Uint32 music_pos = 0;
     bool has_music = false;
 
+    int current_track = 1;
+
     std::vector<ActiveSFX> sfx_channels;
     SDL_AudioDeviceID dev = 0;
+    SDL_AudioSpec have_spec{};
 };
 
 static AudioMixer g_mixer;
+
+void load_track_file(int track_num) {
+    if (g_mixer.dev > 0) SDL_LockAudioDevice(g_mixer.dev);
+
+    if (g_mixer.music_data) {
+        std::free(g_mixer.music_data);
+        g_mixer.music_data = nullptr;
+    }
+    g_mixer.music_len = 0;
+    g_mixer.music_pos = 0;
+    g_mixer.has_music = false;
+    g_mixer.current_track = track_num;
+
+    std::string path = "assets/track" + std::to_string(track_num) + ".wav";
+    SDL_AudioSpec wav_spec;
+    Uint8* wav_buf = nullptr;
+    Uint32 wav_len = 0;
+
+    if (SDL_LoadWAV(path.c_str(), &wav_spec, &wav_buf, &wav_len)) {
+        SDL_AudioCVT cvt;
+        if (SDL_BuildAudioCVT(&cvt, wav_spec.format, wav_spec.channels, wav_spec.freq,
+                              g_mixer.have_spec.format, g_mixer.have_spec.channels, g_mixer.have_spec.freq) >= 0) {
+            cvt.len = wav_len;
+            cvt.buf = static_cast<Uint8*>(std::malloc(wav_len * cvt.len_mult));
+            std::memcpy(cvt.buf, wav_buf, wav_len);
+            SDL_ConvertAudio(&cvt);
+            SDL_FreeWAV(wav_buf);
+
+            g_mixer.music_data = cvt.buf;
+            g_mixer.music_len = cvt.len_cvt;
+            g_mixer.has_music = true;
+        } else {
+            SDL_FreeWAV(wav_buf);
+        }
+    }
+
+    if (g_mixer.dev > 0) SDL_UnlockAudioDevice(g_mixer.dev);
+}
 
 void audio_callback(void* userdata, Uint8* stream, int len) {
     auto* mixer = static_cast<AudioMixer*>(userdata);
@@ -135,7 +189,7 @@ void audio_callback(void* userdata, Uint8* stream, int len) {
 }
 
 void init_audio() {
-    SDL_AudioSpec want{}, have{};
+    SDL_AudioSpec want{};
     want.freq = 44100;
     want.format = AUDIO_S16SYS;
     want.channels = 2;
@@ -143,27 +197,8 @@ void init_audio() {
     want.callback = audio_callback;
     want.userdata = &g_mixer;
 
-    g_mixer.dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
-
-    SDL_AudioSpec wav_spec;
-    Uint8* wav_buf = nullptr;
-    Uint32 wav_len = 0;
-    if (SDL_LoadWAV("assets/music.wav", &wav_spec, &wav_buf, &wav_len)) {
-        SDL_AudioCVT cvt;
-        if (SDL_BuildAudioCVT(&cvt, wav_spec.format, wav_spec.channels, wav_spec.freq,
-                              have.format, have.channels, have.freq) >= 0) {
-            cvt.len = wav_len;
-            cvt.buf = static_cast<Uint8*>(std::malloc(wav_len * cvt.len_mult));
-            std::memcpy(cvt.buf, wav_buf, wav_len);
-            SDL_ConvertAudio(&cvt);
-            SDL_FreeWAV(wav_buf);
-            g_mixer.music_data = cvt.buf;
-            g_mixer.music_len = cvt.len_cvt;
-            g_mixer.has_music = true;
-        } else {
-            SDL_FreeWAV(wav_buf);
-        }
-    }
+    g_mixer.dev = SDL_OpenAudioDevice(nullptr, 0, &want, &g_mixer.have_spec, 0);
+    load_track_file(1);
     if (g_mixer.dev > 0) SDL_PauseAudioDevice(g_mixer.dev, 0);
 }
 
@@ -181,7 +216,7 @@ void sound_play_eat() {
     std::vector<int16_t> samples(total_frames * 2);
     for (int i = 0; i < total_frames; ++i) {
         float p = (float)i / total_frames;
-        float freq = 650.0f + p * 900.0f;
+        float freq = 680.0f + p * 920.0f;
         float s = std::sin(2.0f * M_PI * freq * ((float)i / sr));
         int16_t val = static_cast<int16_t>(s * (1.0f - p) * 9000.0f);
         samples[i * 2] = val;
@@ -220,6 +255,9 @@ void sound_play_crash() {
     play_sfx_buffer(samples);
 }
 
+// =============================================================================
+// UI Элементы
+// =============================================================================
 struct Slider {
     SDL_Rect track;
     std::string label;
@@ -294,7 +332,203 @@ struct Button {
     }
 };
 
-enum class GameState { MENU, SETTINGS, PLAYING, GAMEOVER };
+// =============================================================================
+// Лехман в полный рост
+// =============================================================================
+void draw_lekhman_fullbody(SDL_Renderer* ren, int x, int y, uint32_t now) {
+    float pec_bounce = std::sin(now * 0.007f);
+    int pec_y_off = static_cast<int>(pec_bounce * 4.5f);
+
+    SDL_SetRenderDrawColor(ren, 25, 20, 18, 255);
+    SDL_Rect hair_back{ x + 16, y - 2, 54, 38 };
+    SDL_RenderFillRect(ren, &hair_back);
+
+    SDL_SetRenderDrawColor(ren, 230, 172, 132, 255);
+    SDL_Rect face{ x + 24, y + 10, 38, 28 };
+    SDL_RenderFillRect(ren, &face);
+
+    SDL_SetRenderDrawColor(ren, 200, 140, 100, 255);
+    SDL_RenderDrawLine(ren, x + 24, y + 22, x + 27, y + 32);
+    SDL_RenderDrawLine(ren, x + 61, y + 22, x + 58, y + 32);
+
+    SDL_SetRenderDrawColor(ren, 140, 50, 45, 255);
+    SDL_RenderDrawLine(ren, x + 38, y + 32, x + 49, y + 31);
+
+    bool winking = ((now % 2600) < 380);
+
+    SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+    SDL_Rect eye_l{ x + 30, y + 20, 8, 5 };
+    SDL_RenderFillRect(ren, &eye_l);
+    SDL_SetRenderDrawColor(ren, 20, 25, 35, 255);
+    SDL_Rect pupil_l{ x + 33, y + 20, 4, 5 };
+    SDL_RenderFillRect(ren, &pupil_l);
+    SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+    SDL_RenderDrawPoint(ren, x + 34, y + 21);
+
+    if (winking) {
+        SDL_SetRenderDrawColor(ren, 25, 25, 30, 255);
+        SDL_RenderDrawLine(ren, x + 48, y + 23, x + 56, y + 21);
+        SDL_RenderDrawLine(ren, x + 48, y + 24, x + 56, y + 22);
+    } else {
+        SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+        SDL_Rect eye_r{ x + 48, y + 20, 8, 5 };
+        SDL_RenderFillRect(ren, &eye_r);
+        SDL_SetRenderDrawColor(ren, 20, 25, 35, 255);
+        SDL_Rect pupil_r{ x + 50, y + 20, 4, 5 };
+        SDL_RenderFillRect(ren, &pupil_r);
+        SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+        SDL_RenderDrawPoint(ren, x + 51, y + 21);
+    }
+
+    int curls[6][3] = { {20, 10, 10}, {28, 14, 9}, {36, 16, 11}, {45, 15, 9}, {53, 14, 10}, {61, 9, 8} };
+    for (int i = 0; i < 6; ++i) {
+        SDL_Rect curl{ x + curls[i][0], y + curls[i][1], curls[i][2], 7 };
+        SDL_SetRenderDrawColor(ren, 35, 28, 25, 255);
+        SDL_RenderFillRect(ren, &curl);
+        SDL_SetRenderDrawColor(ren, 55, 45, 40, 255);
+        SDL_RenderDrawPoint(ren, x + curls[i][0] + 2, y + curls[i][1] + 2);
+    }
+
+    SDL_SetRenderDrawColor(ren, 220, 160, 120, 255);
+    SDL_Rect neck{ x + 35, y + 36, 16, 10 };
+    SDL_RenderFillRect(ren, &neck);
+
+    SDL_Rect delts{ x + 8, y + 44, 70, 16 };
+    SDL_RenderFillRect(ren, &delts);
+
+    SDL_SetRenderDrawColor(ren, 240, 180, 138, 255);
+    SDL_Rect pec_l{ x + 16, y + 48 + pec_y_off, 26, 20 };
+    SDL_Rect pec_r{ x + 44, y + 48 + pec_y_off, 26, 20 };
+    SDL_RenderFillRect(ren, &pec_l);
+    SDL_RenderFillRect(ren, &pec_r);
+
+    SDL_SetRenderDrawColor(ren, 175, 110, 75, 255);
+    SDL_RenderDrawLine(ren, x + 16, y + 68 + pec_y_off, x + 41, y + 68 + pec_y_off);
+    SDL_RenderDrawLine(ren, x + 45, y + 68 + pec_y_off, x + 70, y + 68 + pec_y_off);
+    SDL_RenderDrawLine(ren, x + 43, y + 48 + pec_y_off, x + 43, y + 72 + pec_y_off);
+
+    SDL_SetRenderDrawColor(ren, 225, 165, 125, 255);
+    SDL_Rect abs_core{ x + 24, y + 72, 38, 30 };
+    SDL_RenderFillRect(ren, &abs_core);
+
+    SDL_SetRenderDrawColor(ren, 185, 120, 85, 255);
+    SDL_RenderDrawLine(ren, x + 43, y + 72, x + 43, y + 102);
+    SDL_RenderDrawLine(ren, x + 28, y + 80, x + 58, y + 80);
+    SDL_RenderDrawLine(ren, x + 30, y + 90, x + 56, y + 90);
+    SDL_RenderDrawLine(ren, x + 32, y + 99, x + 54, y + 99);
+
+    SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+    SDL_Rect ck_band{ x + 20, y + 102, 46, 7 };
+    SDL_RenderFillRect(ren, &ck_band);
+
+    SDL_SetRenderDrawColor(ren, 20, 20, 20, 255);
+    SDL_Rect ck_logo{ x + 38, y + 104, 10, 3 };
+    SDL_RenderFillRect(ren, &ck_logo);
+
+    SDL_SetRenderDrawColor(ren, 25, 27, 34, 255);
+    SDL_Rect ck_boxers{ x + 20, y + 109, 46, 22 };
+    SDL_RenderFillRect(ren, &ck_boxers);
+
+    SDL_SetRenderDrawColor(ren, 220, 160, 120, 255);
+    SDL_Rect leg_l{ x + 20, y + 131, 18, 38 };
+    SDL_Rect leg_r{ x + 48, y + 131, 18, 38 };
+    SDL_RenderFillRect(ren, &leg_l);
+    SDL_RenderFillRect(ren, &leg_r);
+
+    SDL_SetRenderDrawColor(ren, 180, 115, 80, 255);
+    SDL_RenderDrawLine(ren, x + 28, y + 135, x + 28, y + 155);
+    SDL_RenderDrawLine(ren, x + 58, y + 135, x + 58, y + 155);
+}
+
+void draw_speech_bubble(SDL_Renderer* ren, int bx, int by, int bw, int bh, const std::string& text) {
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 12, 16, 24, 245);
+    SDL_Rect bubble{ bx, by, bw, bh };
+    SDL_RenderFillRect(ren, &bubble);
+
+    SDL_SetRenderDrawColor(ren, 43, 216, 87, 240);
+    SDL_RenderDrawRect(ren, &bubble);
+
+    SDL_RenderDrawLine(ren, bx, by + bh / 2 - 4, bx - 14, by + bh / 2 + 6);
+    SDL_RenderDrawLine(ren, bx, by + bh / 2 + 10, bx - 14, by + bh / 2 + 6);
+
+    draw_text(ren, text, bx + 16, by + (bh - 16) / 2, 2, { 255, 255, 255, 255 }, true);
+}
+
+// =============================================================================
+// Чистый, стильный логотип DISNAKECTOR
+// =============================================================================
+void draw_clean_pro_logo(SDL_Renderer* ren, int center_x, int top_y, uint32_t now) {
+    std::string title = "DISNAKECTOR";
+    int text_w = get_text_width(title, 4);
+
+    int plate_w = text_w + 50;
+    int plate_h = 56;
+    int plate_x = center_x - plate_w / 2;
+    int plate_y = top_y;
+
+    // Плавное неоновое дыхание контура
+    float pulse = (std::sin(now * 0.005f) + 1.0f) * 0.5f;
+    uint8_t border_glow = static_cast<uint8_t>(170 + pulse * 85);
+
+    // Подложка
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 14, 20, 30, 240);
+    SDL_Rect plate{ plate_x, plate_y, plate_w, plate_h };
+    SDL_RenderFillRect(ren, &plate);
+
+    // Пульсирующая неоновая рамка
+    SDL_SetRenderDrawColor(ren, 0, border_glow, 255, 255);
+    SDL_RenderDrawRect(ren, &plate);
+
+    // Боковые энерго-стрелы
+    int arrow_len = 30;
+    SDL_SetRenderDrawColor(ren, 43, 216, 87, 255);
+    SDL_RenderDrawLine(ren, plate_x - 10, plate_y + plate_h / 2, plate_x - 10 - arrow_len, plate_y + plate_h / 2);
+    SDL_RenderDrawLine(ren, plate_x + plate_w + 10, plate_y + plate_h / 2, plate_x + plate_w + 10 + arrow_len, plate_y + plate_h / 2);
+
+    // 3D-текст логотипа
+    int tx = center_x - text_w / 2;
+    draw_text(ren, title, tx + 3, plate_y + 14, 4, { 5, 10, 16, 255 }, false); // Тень
+    draw_text(ren, title, tx, plate_y + 11, 4, { 43, 225, 95, 255 }, false);   // Яркий изумруд
+}
+
+// =============================================================================
+// Сенсорные стрелочки управления (Touch D-Pad)
+// =============================================================================
+struct TouchButton {
+    SDL_Rect rect;
+    std::string label;
+    int dx, dy;
+    bool pressed = false;
+};
+
+static std::vector<TouchButton> g_touch_pad = {
+    { { SCREEN_WIDTH - 120, SCREEN_HEIGHT - 170, 50, 50 }, "^", 0, -1, false },
+    { { SCREEN_WIDTH - 120, SCREEN_HEIGHT - 60,  50, 50 }, "v", 0,  1, false },
+    { { SCREEN_WIDTH - 175, SCREEN_HEIGHT - 115, 50, 50 }, "<", -1, 0, false },
+    { { SCREEN_WIDTH - 65,  SCREEN_HEIGHT - 115, 50, 50 }, ">",  1, 0, false }
+};
+
+void draw_touch_dpad(SDL_Renderer* ren) {
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    for (const auto& btn : g_touch_pad) {
+        if (btn.pressed) {
+            SDL_SetRenderDrawColor(ren, 43, 216, 87, 180);
+            SDL_RenderFillRect(ren, &btn.rect);
+            SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+        } else {
+            SDL_SetRenderDrawColor(ren, 20, 30, 45, 130);
+            SDL_RenderFillRect(ren, &btn.rect);
+            SDL_SetRenderDrawColor(ren, 0, 220, 255, 180);
+        }
+        SDL_RenderDrawRect(ren, &btn.rect);
+        int tw = get_text_width(btn.label, 2);
+        draw_text(ren, btn.label, btn.rect.x + (btn.rect.w - tw) / 2, btn.rect.y + 16, 2, { 255, 255, 255, 240 }, false);
+    }
+}
+
+enum class GameState { AUDIO_PROMPT, MENU, SETTINGS, PLAYING, GAMEOVER, EXIT_CONFIRM };
 
 static void spawn_apple(Apple& apple, const Snake& snake, std::mt19937& rng) {
     std::uniform_int_distribution<int> dx(0, GRID_WIDTH - 1);
@@ -345,22 +579,25 @@ int main() {
 
     int visual_look_dx = 1;
     int visual_look_dy = 0;
-    std::optional<std::pair<int, int>> next_turn;
+    std::deque<std::pair<int, int>> safe_input_queue;
 
     int score = 0;
     int high_score = 0;
     int initial_speed = 95;
     int tick_rate = initial_speed;
 
+    bool touch_controls_enabled = false;
+
     auto reset_game = [&]() {
-        snake.length = 4;
+        snake.length = 5;
         snake.dx = 1; snake.dy = 0;
         visual_look_dx = 1; visual_look_dy = 0;
-        next_turn = std::nullopt;
-        snake.x[0] = 6; snake.y[0] = 10;
-        snake.x[1] = 5; snake.y[1] = 10;
-        snake.x[2] = 4; snake.y[2] = 10;
-        snake.x[3] = 3; snake.y[3] = 10;
+        safe_input_queue.clear();
+        snake.x[0] = 7; snake.y[0] = 10;
+        snake.x[1] = 6; snake.y[1] = 10;
+        snake.x[2] = 5; snake.y[2] = 10;
+        snake.x[3] = 4; snake.y[3] = 10;
+        snake.x[4] = 3; snake.y[4] = 10;
         for (int i = 0; i < snake.length; ++i) {
             prev_x[i] = snake.x[i];
             prev_y[i] = snake.y[i];
@@ -374,21 +611,32 @@ int main() {
     spawn_apple(apple, snake, rng);
 
     std::vector<Particle> particles;
-    GameState state = GameState::MENU;
+    GameState state = GameState::AUDIO_PROMPT; // Вежливый старт с вопросом о музыке
     bool running = true;
 
-    Button btn_play    { { 275, 240, 250, 50 }, "PLAY" };
-    Button btn_settings{ { 275, 310, 250, 50 }, "SETTINGS" };
-    Button btn_exit    { { 275, 380, 250, 50 }, "EXIT" };
+    // Кнопки стартового окна музыки
+    Button btn_music_yes { { 260, 270, 120, 50 }, "ДА" };
+    Button btn_music_no  { { 420, 270, 120, 50 }, "НЕТ" };
 
-    Button btn_speed   { { 250, 340, 300, 48 }, "SPEED: NORMAL" };
-    Button btn_back    { { 250, 410, 300, 48 }, "BACK" };
+    Button btn_play    { { 275, 185, 250, 48 }, "PLAY" };
+    Button btn_settings{ { 275, 245, 250, 48 }, "SETTINGS" };
+    Button btn_exit    { { 275, 305, 250, 48 }, "EXIT" };
 
-    Button btn_restart { { 275, 290, 250, 50 }, "RESTART" };
-    Button btn_to_menu { { 275, 360, 250, 50 }, "MAIN MENU" };
+    Button btn_track   { { 250, 245, 300, 44 }, "TRACK: 1 / 4" };
+    Button btn_speed   { { 250, 298, 300, 44 }, "SPEED: NORMAL" };
+    Button btn_touch   { { 250, 350, 300, 44 }, "TOUCH UI: OFF" };
+    Button btn_back    { { 250, 402, 300, 44 }, "BACK" };
 
-    Slider slider_sfx  { { 250, 210, 300, 14 }, "SOUND FX", 0.8f };
-    Slider slider_music{ { 250, 280, 300, 14 }, "MUSIC", 0.5f };
+    Button btn_restart { { 275, 280, 250, 50 }, "RESTART" };
+    Button btn_to_menu { { 275, 350, 250, 50 }, "MAIN MENU" };
+
+    Button btn_confirm_yes{ { 260, 280, 120, 50 }, "ДА" };
+    Button btn_confirm_no { { 420, 280, 120, 50 }, "НЕТ" };
+
+    Slider slider_sfx  { { 250, 145, 300, 14 }, "SOUND FX", 0.8f };
+    Slider slider_music{ { 250, 195, 300, 14 }, "MUSIC", 0.0f };
+
+    std::string mascot_phrase = "С МУЗОНОМ ИЛИ В ТИШИНЕ?";
 
     uint32_t last_tick = SDL_GetTicks();
     uint32_t last_frame_time = SDL_GetTicks();
@@ -402,7 +650,10 @@ int main() {
         Uint32 mouse_btn = SDL_GetMouseState(&mouse_x, &mouse_y);
         bool mouse_down = (mouse_btn & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
 
-        if (state == GameState::MENU) {
+        if (state == GameState::AUDIO_PROMPT) {
+            btn_music_yes.update(mouse_x, mouse_y);
+            btn_music_no.update(mouse_x, mouse_y);
+        } else if (state == GameState::MENU) {
             btn_play.update(mouse_x, mouse_y);
             btn_settings.update(mouse_x, mouse_y);
             btn_exit.update(mouse_x, mouse_y);
@@ -410,13 +661,22 @@ int main() {
             slider_sfx.update(mouse_x, mouse_y, mouse_down);
             slider_music.update(mouse_x, mouse_y, mouse_down);
 
+            if (slider_music.dragging) {
+                mascot_phrase = "ЧЕ НОРМАЛЬНЫЙ МУЗОН?";
+            }
+
             SDL_LockAudioDevice(g_mixer.dev);
             g_mixer.sfx_volume = slider_sfx.value;
             g_mixer.music_volume = slider_music.value;
             SDL_UnlockAudioDevice(g_mixer.dev);
 
+            btn_track.update(mouse_x, mouse_y);
             btn_speed.update(mouse_x, mouse_y);
+            btn_touch.update(mouse_x, mouse_y);
             btn_back.update(mouse_x, mouse_y);
+        } else if (state == GameState::EXIT_CONFIRM) {
+            btn_confirm_yes.update(mouse_x, mouse_y);
+            btn_confirm_no.update(mouse_x, mouse_y);
         } else if (state == GameState::GAMEOVER) {
             btn_restart.update(mouse_x, mouse_y);
             btn_to_menu.update(mouse_x, mouse_y);
@@ -427,7 +687,39 @@ int main() {
             if (event.type == SDL_QUIT) {
                 running = false;
             } else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-                if (state == GameState::MENU) {
+                if (state == GameState::AUDIO_PROMPT) {
+                    if (btn_music_yes.hovered) {
+                        sound_play_click();
+                        SDL_LockAudioDevice(g_mixer.dev);
+                        g_mixer.music_volume = 0.5f;
+                        slider_music.value = 0.5f;
+                        SDL_UnlockAudioDevice(g_mixer.dev);
+                        state = GameState::MENU;
+                        mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
+                    } else if (btn_music_no.hovered) {
+                        sound_play_click();
+                        SDL_LockAudioDevice(g_mixer.dev);
+                        g_mixer.music_volume = 0.0f;
+                        slider_music.value = 0.0f;
+                        SDL_UnlockAudioDevice(g_mixer.dev);
+                        state = GameState::MENU;
+                        mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
+                    }
+                } else if (state == GameState::PLAYING && touch_controls_enabled) {
+                    for (auto& btn : g_touch_pad) {
+                        if (mouse_x >= btn.rect.x && mouse_x <= btn.rect.x + btn.rect.w &&
+                            mouse_y >= btn.rect.y && mouse_y <= btn.rect.y + btn.rect.h) {
+                            btn.pressed = true;
+                            auto last_dir = safe_input_queue.empty() ? std::make_pair(snake.dx, snake.dy) : safe_input_queue.back();
+                            if (btn.dx != -last_dir.first || btn.dy != -last_dir.second) {
+                                if (safe_input_queue.size() < 2) {
+                                    safe_input_queue.push_back({btn.dx, btn.dy});
+                                    visual_look_dx = btn.dx; visual_look_dy = btn.dy;
+                                }
+                            }
+                        }
+                    }
+                } else if (state == GameState::MENU) {
                     if (btn_play.hovered) {
                         sound_play_click();
                         reset_game();
@@ -437,23 +729,47 @@ int main() {
                         sound_play_click();
                         state = GameState::SETTINGS;
                     } else if (btn_exit.hovered) {
+                        sound_play_click();
+                        state = GameState::EXIT_CONFIRM;
+                        mascot_phrase = "СЕРЬЕЗНО ЛИВАЕШЬ?(";
+                    }
+                } else if (state == GameState::EXIT_CONFIRM) {
+                    if (btn_confirm_yes.hovered) {
                         running = false;
+                    } else if (btn_confirm_no.hovered) {
+                        sound_play_click();
+                        state = GameState::MENU;
+                        mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
                     }
                 } else if (state == GameState::SETTINGS) {
-                    if (btn_speed.hovered) {
+                    if (btn_track.hovered) {
+                        sound_play_click();
+                        int next_track = (g_mixer.current_track % 4) + 1;
+                        load_track_file(next_track);
+                        btn_track.text = "TRACK: " + std::to_string(next_track) + " / 4";
+                        mascot_phrase = "ЧЕ НОРМАЛЬНЫЙ МУЗОН?";
+                    } else if (btn_speed.hovered) {
+                        sound_play_click();
                         if (initial_speed == 95) {
                             initial_speed = 70;
                             btn_speed.text = "SPEED: FAST";
+                            mascot_phrase = "НИХУЯ СЕБЕ FAST?";
                         } else if (initial_speed == 70) {
                             initial_speed = 48;
                             btn_speed.text = "SPEED: INSANE";
+                            mascot_phrase = "INSANE? ЕБА ЧЕ ЗА МОНСТР";
                         } else {
                             initial_speed = 95;
                             btn_speed.text = "SPEED: NORMAL";
+                            mascot_phrase = "НОРМАЛЬНАЯ СЛОЖНОСТЬ - ЗАЕБИСЬ";
                         }
+                    } else if (btn_touch.hovered) {
                         sound_play_click();
+                        touch_controls_enabled = !touch_controls_enabled;
+                        btn_touch.text = touch_controls_enabled ? "TOUCH UI: ON" : "TOUCH UI: OFF";
                     } else if (btn_back.hovered) {
                         sound_play_click();
+                        mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
                         state = GameState::MENU;
                     }
                 } else if (state == GameState::GAMEOVER) {
@@ -464,31 +780,44 @@ int main() {
                         state = GameState::PLAYING;
                     } else if (btn_to_menu.hovered) {
                         sound_play_click();
+                        mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
                         state = GameState::MENU;
                     }
                 }
+            } else if (event.type == SDL_MOUSEBUTTONUP) {
+                for (auto& btn : g_touch_pad) btn.pressed = false;
             } else if (event.type == SDL_KEYDOWN) {
                 if (event.key.keysym.sym == SDLK_ESCAPE) {
                     if (state == GameState::PLAYING) state = GameState::MENU;
                     else if (state == GameState::SETTINGS) state = GameState::MENU;
-                    else if (state == GameState::MENU) running = false;
+                    else if (state == GameState::EXIT_CONFIRM) state = GameState::MENU;
+                    else if (state == GameState::AUDIO_PROMPT) {
+                        state = GameState::MENU;
+                        mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
+                    } else if (state == GameState::MENU) {
+                        state = GameState::EXIT_CONFIRM;
+                        mascot_phrase = "СЕРЬЕЗНО ЛИВАЕШЬ?(";
+                    }
                 }
                 if (state == GameState::PLAYING) {
-                    int cur_dx = next_turn ? next_turn->first : snake.dx;
-                    int cur_dy = next_turn ? next_turn->second : snake.dy;
+                    int req_dx = 0, req_dy = 0;
                     switch (event.key.keysym.sym) {
-                        case SDLK_UP: case SDLK_w:
-                            if (cur_dy == 0) { next_turn = {0, -1}; visual_look_dx = 0; visual_look_dy = -1; }
-                            break;
-                        case SDLK_DOWN: case SDLK_s:
-                            if (cur_dy == 0) { next_turn = {0, 1}; visual_look_dx = 0; visual_look_dy = 1; }
-                            break;
-                        case SDLK_LEFT: case SDLK_a:
-                            if (cur_dx == 0) { next_turn = {-1, 0}; visual_look_dx = -1; visual_look_dy = 0; }
-                            break;
-                        case SDLK_RIGHT: case SDLK_d:
-                            if (cur_dx == 0) { next_turn = {1, 0}; visual_look_dx = 1; visual_look_dy = 0; }
-                            break;
+                        case SDLK_UP: case SDLK_w:    req_dx = 0; req_dy = -1; break;
+                        case SDLK_DOWN: case SDLK_s:  req_dx = 0; req_dy = 1; break;
+                        case SDLK_LEFT: case SDLK_a:  req_dx = -1; req_dy = 0; break;
+                        case SDLK_RIGHT: case SDLK_d: req_dx = 1; req_dy = 0; break;
+                    }
+
+                    if (req_dx != 0 || req_dy != 0) {
+                        auto last_dir = safe_input_queue.empty() ? std::make_pair(snake.dx, snake.dy) : safe_input_queue.back();
+                        if (req_dx != -last_dir.first || req_dy != -last_dir.second) {
+                            if (req_dx != last_dir.first || req_dy != last_dir.second) {
+                                if (safe_input_queue.size() < 2) {
+                                    safe_input_queue.push_back({req_dx, req_dy});
+                                    visual_look_dx = req_dx; visual_look_dy = req_dy;
+                                }
+                            }
+                        }
                     }
                 } else if (state == GameState::GAMEOVER && (event.key.keysym.sym == SDLK_SPACE || event.key.keysym.sym == SDLK_r)) {
                     reset_game();
@@ -507,10 +836,10 @@ int main() {
                 prev_y[i] = snake.y[i];
             }
 
-            if (next_turn) {
-                snake.dx = next_turn->first;
-                snake.dy = next_turn->second;
-                next_turn = std::nullopt;
+            if (!safe_input_queue.empty()) {
+                snake.dx = safe_input_queue.front().first;
+                snake.dy = safe_input_queue.front().second;
+                safe_input_queue.pop_front();
             }
             visual_look_dx = snake.dx;
             visual_look_dy = snake.dy;
@@ -554,68 +883,109 @@ int main() {
         particles.erase(std::remove_if(particles.begin(), particles.end(), [](const Particle& p) { return p.life <= 0.0f; }), particles.end());
 
         // =====================================================================
-        // РЕНДЕРИНГ (ЧИСТАЯ ПРОЦЕДУРНАЯ ГРАФИКА)
+        // РЕНДЕРИНГ
         // =====================================================================
-        SDL_SetRenderDrawColor(renderer, 12, 16, 22, 255);
+        SDL_SetRenderDrawColor(renderer, 10, 14, 20, 255);
         SDL_RenderClear(renderer);
 
-        SDL_SetRenderDrawColor(renderer, 20, 26, 35, 255);
+        // Кибер-сетка
+        SDL_SetRenderDrawColor(renderer, 18, 24, 34, 255);
         for (int x = 0; x < SCREEN_WIDTH; x += CELL_SIZE) SDL_RenderDrawLine(renderer, x, 0, x, SCREEN_HEIGHT);
         for (int y = 0; y < SCREEN_HEIGHT; y += CELL_SIZE) SDL_RenderDrawLine(renderer, 0, y, SCREEN_WIDTH, y);
 
-        // Яблоко со стеблем
-        SDL_Rect ab{ apple.x * CELL_SIZE + 4, apple.y * CELL_SIZE + 5, CELL_SIZE - 8, CELL_SIZE - 9 };
-        SDL_SetRenderDrawColor(renderer, 230, 57, 70, 255);
-        SDL_RenderFillRect(renderer, &ab);
-        SDL_Rect as{ apple.x * CELL_SIZE + CELL_SIZE / 2 - 2, apple.y * CELL_SIZE + 2, 4, 4 };
-        SDL_SetRenderDrawColor(renderer, 46, 196, 182, 255);
-        SDL_RenderFillRect(renderer, &as);
+        // Глянцевое яблоко
+        int ax = apple.x * CELL_SIZE;
+        int ay = apple.y * CELL_SIZE;
+        SDL_Rect apple_base{ ax + 4, ay + 6, CELL_SIZE - 8, CELL_SIZE - 10 };
+        SDL_SetRenderDrawColor(renderer, 230, 45, 60, 255);
+        SDL_RenderFillRect(renderer, &apple_base);
 
-        // Змейка
-        for (int i = snake.length - 1; i >= 0; --i) {
+        SDL_Rect stem{ ax + CELL_SIZE / 2 - 2, ay + 2, 3, 5 };
+        SDL_SetRenderDrawColor(renderer, 120, 70, 35, 255);
+        SDL_RenderFillRect(renderer, &stem);
+
+        SDL_Rect leaf{ ax + CELL_SIZE / 2 + 1, ay + 2, 5, 3 };
+        SDL_SetRenderDrawColor(renderer, 43, 216, 87, 255);
+        SDL_RenderFillRect(renderer, &leaf);
+
+        SDL_SetRenderDrawColor(renderer, 255, 200, 210, 255);
+        SDL_RenderDrawPoint(renderer, ax + 8, ay + 9);
+        SDL_RenderDrawPoint(renderer, ax + 9, ay + 9);
+
+        // =====================================================================
+        // Сглаженное анатомическое тело змейки
+        // =====================================================================
+        std::vector<std::pair<float, float>> seg_centers(snake.length);
+        for (int i = 0; i < snake.length; ++i) {
             float rx = prev_x[i] + (snake.x[i] - prev_x[i]) * alpha;
             float ry = prev_y[i] + (snake.y[i] - prev_y[i]) * alpha;
-            int px = (int)std::round(rx * CELL_SIZE);
-            int py = (int)std::round(ry * CELL_SIZE);
-            SDL_Rect seg_dst{ px + 2, py + 2, CELL_SIZE - 4, CELL_SIZE - 4 };
+            seg_centers[i] = { rx * CELL_SIZE + CELL_SIZE / 2.0f, ry * CELL_SIZE + CELL_SIZE / 2.0f };
+        }
 
-            if (i == 0) {
-                // Голова
-                SDL_SetRenderDrawColor(renderer, 43, 216, 87, 255);
-                SDL_RenderFillRect(renderer, &seg_dst);
+        for (int i = snake.length - 1; i > 0; --i) {
+            float progress = static_cast<float>(i) / snake.length;
+            int radius = static_cast<int>(13.5f - progress * 4.5f);
 
-                // Глаза (0 ms Lag)
-                int e1_x = px + 8, e1_y = py + 8, e2_x = px + 20, e2_y = py + 8;
-                int p1_x = e1_x + 1, p1_y = e1_y + 1, p2_x = e2_x + 1, p2_y = e2_y + 1;
-                if (visual_look_dx == 1)      { e1_x = px + 18; e1_y = py + 6;  e2_x = px + 18; e2_y = py + 20; p1_x = px + 22; p1_y = py + 8;  p2_x = px + 22; p2_y = py + 22; }
-                else if (visual_look_dx == -1){ e1_x = px + 8;  e1_y = py + 6;  e2_x = px + 8;  e2_y = py + 20; p1_x = px + 7;  p1_y = py + 8;  p2_x = px + 7;  p2_y = py + 22; }
-                else if (visual_look_dy == 1) { e1_x = px + 6;  e1_y = py + 18; e2_x = px + 20; e2_y = py + 18; p1_x = px + 8;  p1_y = py + 22; p2_x = px + 22; p2_y = py + 22; }
+            auto p1 = seg_centers[i];
+            auto p2 = seg_centers[i - 1];
 
-                SDL_SetRenderDrawColor(renderer, 245, 245, 245, 255);
-                SDL_Rect eye1{ e1_x, e1_y, 6, 6 }, eye2{ e2_x, e2_y, 6, 6 };
-                SDL_RenderFillRect(renderer, &eye1); SDL_RenderFillRect(renderer, &eye2);
-                SDL_SetRenderDrawColor(renderer, 10, 10, 10, 255);
-                SDL_Rect pup1{ p1_x, p1_y, 3, 3 }, pup2{ p2_x, p2_y, 3, 3 };
-                SDL_RenderFillRect(renderer, &pup1); SDL_RenderFillRect(renderer, &pup2);
+            for (int step = 0; step <= 5; ++step) {
+                float t = step / 5.0f;
+                int ix = static_cast<int>(p1.first + (p2.first - p1.first) * t);
+                int iy = static_cast<int>(p1.second + (p2.second - p1.second) * t);
 
-                // Мерцающий язык
-                if ((now / 150) % 2 == 0) {
-                    SDL_SetRenderDrawColor(renderer, 230, 57, 70, 255);
-                    int tx = px + CELL_SIZE / 2;
-                    int ty = py + CELL_SIZE / 2;
-                    if (visual_look_dx == 1)       SDL_RenderDrawLine(renderer, px + CELL_SIZE - 2, ty, px + CELL_SIZE + 6, ty);
-                    else if (visual_look_dx == -1) SDL_RenderDrawLine(renderer, px + 2, ty, px - 6, ty);
-                    else if (visual_look_dy == -1) SDL_RenderDrawLine(renderer, tx, py + 2, tx, py - 6);
-                    else if (visual_look_dy == 1)  SDL_RenderDrawLine(renderer, tx, py + CELL_SIZE - 2, tx, py + CELL_SIZE + 6);
-                }
-            } else {
-                // Тело со сглаженным внутренним объемом
-                SDL_Rect outer{ px + 3, py + 3, CELL_SIZE - 6, CELL_SIZE - 6 };
-                SDL_SetRenderDrawColor(renderer, 27, 138, 56, 255);
-                SDL_RenderFillRect(renderer, &outer);
-                SDL_Rect inner{ px + 6, py + 6, CELL_SIZE - 12, CELL_SIZE - 12 };
-                SDL_SetRenderDrawColor(renderer, 35, 165, 72, 255);
-                SDL_RenderFillRect(renderer, &inner);
+                draw_filled_circle(renderer, ix, iy, radius, { 25, 135, 60, 255 });
+                draw_filled_circle(renderer, ix, iy, radius - 2, { 38, 175, 80, 255 });
+                draw_filled_circle(renderer, ix, iy, std::max(2, radius - 6), { 65, 230, 115, 255 });
+            }
+        }
+
+        // Голова змейки
+        int hx = static_cast<int>(seg_centers[0].first);
+        int hy = static_cast<int>(seg_centers[0].second);
+        int head_r = 14;
+
+        draw_filled_circle(renderer, hx, hy, head_r, { 30, 150, 70, 255 });
+        draw_filled_circle(renderer, hx, hy, head_r - 2, { 45, 195, 90, 255 });
+
+        int e1_x = hx, e1_y = hy, e2_x = hx, e2_y = hy;
+        if (visual_look_dx == 1) {
+            e1_x = hx + 4; e1_y = hy - 6; e2_x = hx + 4; e2_y = hy + 6;
+        } else if (visual_look_dx == -1) {
+            e1_x = hx - 4; e1_y = hy - 6; e2_x = hx - 4; e2_y = hy + 6;
+        } else if (visual_look_dy == 1) {
+            e1_x = hx - 6; e1_y = hy + 4; e2_x = hx + 6; e2_y = hy + 4;
+        } else {
+            e1_x = hx - 6; e1_y = hy - 4; e2_x = hx + 6; e2_y = hy - 4;
+        }
+
+        draw_filled_circle(renderer, e1_x, e1_y, 4, { 255, 205, 30, 255 });
+        draw_filled_circle(renderer, e2_x, e2_y, 4, { 255, 205, 30, 255 });
+
+        SDL_SetRenderDrawColor(renderer, 10, 15, 20, 255);
+        SDL_RenderDrawLine(renderer, e1_x, e1_y - 2, e1_x, e1_y + 2);
+        SDL_RenderDrawLine(renderer, e2_x, e2_y - 2, e2_x, e2_y + 2);
+
+        if ((now / 150) % 2 == 0) {
+            SDL_SetRenderDrawColor(renderer, 235, 45, 60, 255);
+            int tx = hx + visual_look_dx * 13;
+            int ty = hy + visual_look_dy * 13;
+            if (visual_look_dx == 1) {
+                SDL_RenderDrawLine(renderer, tx, ty, tx + 6, ty);
+                SDL_RenderDrawLine(renderer, tx + 6, ty, tx + 9, ty - 2);
+                SDL_RenderDrawLine(renderer, tx + 6, ty, tx + 9, ty + 2);
+            } else if (visual_look_dx == -1) {
+                SDL_RenderDrawLine(renderer, tx, ty, tx - 6, ty);
+                SDL_RenderDrawLine(renderer, tx - 6, ty, tx - 9, ty - 2);
+                SDL_RenderDrawLine(renderer, tx - 6, ty, tx - 9, ty + 2);
+            } else if (visual_look_dy == 1) {
+                SDL_RenderDrawLine(renderer, tx, ty, tx, ty + 6);
+                SDL_RenderDrawLine(renderer, tx, ty + 6, tx - 2, ty + 9);
+                SDL_RenderDrawLine(renderer, tx, ty + 6, tx + 2, ty + 9);
+            } else if (visual_look_dy == -1) {
+                SDL_RenderDrawLine(renderer, tx, ty, tx, ty - 6);
+                SDL_RenderDrawLine(renderer, tx, ty - 6, tx - 2, ty - 9);
+                SDL_RenderDrawLine(renderer, tx, ty - 6, tx + 2, ty - 9);
             }
         }
 
@@ -639,22 +1009,63 @@ int main() {
             std::string record_str = "BEST: " + std::to_string(high_score);
             draw_text(renderer, score_str, 18, 18, 2, { 43, 216, 87, 255 });
             draw_text(renderer, record_str, 175, 18, 2, { 255, 209, 102, 255 });
+
+            if (touch_controls_enabled) {
+                draw_touch_dpad(renderer);
+            }
         }
 
-        // Меню
-        if (state == GameState::MENU) {
+        // =====================================================================
+        // Стартовый диалог выбора звука
+        // =====================================================================
+        if (state == GameState::AUDIO_PROMPT) {
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 6, 8, 14, 245);
+            SDL_Rect full{ 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT };
+            SDL_RenderFillRect(renderer, &full);
+
+            std::string prompt = "ВКЛЮЧИТЬ МУЗЫКУ?";
+            int pw = get_text_width(prompt, 3);
+            draw_text(renderer, prompt, (SCREEN_WIDTH - pw) / 2, 190, 3, { 255, 255, 255, 255 });
+
+            btn_music_yes.draw(renderer);
+            btn_music_no.draw(renderer);
+
+            draw_lekhman_fullbody(renderer, 30, 420, now);
+            draw_speech_bubble(renderer, 130, 485, 635, 60, mascot_phrase);
+
+        } else if (state == GameState::MENU) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(renderer, 8, 12, 18, 225);
             SDL_Rect full{ 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT };
             SDL_RenderFillRect(renderer, &full);
 
-            std::string logo = "DISNAKECTOR";
-            int logo_w = get_text_width(logo, 5);
-            draw_text(renderer, logo, (SCREEN_WIDTH - logo_w) / 2, 110, 5, { 43, 216, 87, 255 });
+            // Чистый логотип
+            draw_clean_pro_logo(renderer, SCREEN_WIDTH / 2, 75, now);
 
             btn_play.draw(renderer);
             btn_settings.draw(renderer);
             btn_exit.draw(renderer);
+
+            draw_lekhman_fullbody(renderer, 30, 420, now);
+            draw_speech_bubble(renderer, 130, 485, 635, 60, mascot_phrase);
+
+        } else if (state == GameState::EXIT_CONFIRM) {
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 6, 8, 14, 235);
+            SDL_Rect full{ 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT };
+            SDL_RenderFillRect(renderer, &full);
+
+            std::string prompt = "ТЫ УВЕРЕН?";
+            int pw = get_text_width(prompt, 4);
+            draw_text(renderer, prompt, (SCREEN_WIDTH - pw) / 2, 190, 4, { 255, 255, 255, 255 });
+
+            btn_confirm_yes.draw(renderer);
+            btn_confirm_no.draw(renderer);
+
+            draw_lekhman_fullbody(renderer, 30, 420, now);
+            draw_speech_bubble(renderer, 130, 485, 635, 60, mascot_phrase);
+
         } else if (state == GameState::SETTINGS) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(renderer, 8, 12, 18, 235);
@@ -663,12 +1074,18 @@ int main() {
 
             std::string title = "SETTINGS";
             int tw = get_text_width(title, 4);
-            draw_text(renderer, title, (SCREEN_WIDTH - tw) / 2, 90, 4, { 255, 255, 255, 255 });
+            draw_text(renderer, title, (SCREEN_WIDTH - tw) / 2, 60, 4, { 255, 255, 255, 255 });
 
             slider_sfx.draw(renderer);
             slider_music.draw(renderer);
+            btn_track.draw(renderer);
             btn_speed.draw(renderer);
+            btn_touch.draw(renderer);
             btn_back.draw(renderer);
+
+            draw_lekhman_fullbody(renderer, 30, 420, now);
+            draw_speech_bubble(renderer, 130, 485, 635, 60, mascot_phrase);
+
         } else if (state == GameState::GAMEOVER) {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(renderer, 100, 10, 18, 185);
