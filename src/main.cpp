@@ -544,7 +544,8 @@ static void spawn_apple(Apple& apple, const Snake& snake, std::mt19937& rng) {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    (void)argc; (void)argv;
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         std::cerr << "[FATAL] SDL_Init: " << SDL_GetError() << "\n";
         return 1;
@@ -586,7 +587,11 @@ int main() {
     int initial_speed = 95;
     int tick_rate = initial_speed;
 
+    #if defined(__ANDROID__)
+    bool touch_controls_enabled = true;
+#else
     bool touch_controls_enabled = false;
+#endif
 
     auto reset_game = [&]() {
         snake.length = 5;

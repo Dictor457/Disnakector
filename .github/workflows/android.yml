@@ -1,0 +1,100 @@
+name: Build Android APK (ARM64)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android NDK (r26d)
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          link-to-sdk: true
+
+      - name: Prepare SDL2 Android Project Template
+        run: |
+          SDL_VER="2.30.8"
+          curl -sLO https://github.com/libsdl-org/SDL/releases/download/release-$\{SDL_VER\}/SDL2-$\{SDL_VER\}.tar.gz
+          tar -xzf SDL2-${SDL_VER}.tar.gz
+
+          # Создаем структуру Android-проекта
+          cp -r SDL2-${SDL_VER}/android-project android-build
+          cd android-build
+
+          # Копируем исходники SDL2 в JNI
+          mkdir -p app/src/main/jni/SDL
+          cp -r ../SDL2-${SDL_VER}/* app/src/main/jni/SDL/
+
+          # Копируем исходники игры
+          mkdir -p app/src/main/jni/src
+          cp ../src/main.cpp app/src/main/jni/src/
+          cp ../src/font.hpp app/src/main/jni/src/
+
+          # Копируем ассеты игры (треки) внутрь APK
+          mkdir -p app/src/main/assets/assets
+          if [ -d "../assets" ]; then
+            cp -r ../assets/* app/src/main/assets/assets/ || true
+          fi
+
+          # Настраиваем Android.mk под C++20
+          cat << 'MK' > app/src/main/jni/src/Android.mk
+          LOCAL_PATH := $(call my-dir)
+          include $(CLEAR_VARS)
+          LOCAL_MODULE := main
+          LOCAL_C_INCLUDES := $(LOCAL_PATH)/../SDL/include $(LOCAL_PATH)
+          LOCAL_SRC_FILES := main.cpp
+          LOCAL_SHARED_LIBRARIES := SDL2
+          LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog -landroid
+          LOCAL_CPPFLAGS := -std=c++20
+          include $(BUILD_SHARED_LIBRARY)
+          MK
+
+          # Настраиваем сборку под 64-битный ARM Cortex-A725 (arm64-v8a)
+          cat << 'APP_MK' > app/src/main/jni/Application.mk
+          APP_ABI := arm64-v8a
+          APP_PLATFORM := android-21
+          APP_STL := c++_shared
+          APP_MK
+
+          # Задаем имя игры в манифесте
+          sed -i 's/<string name="app_name">Game<\/string>/<string name="app_name">Disnakector<\/string>/g' app/src/main/res/values/strings.xml
+          sed -i 's/android:screenOrientation="landscape"/android:screenOrientation="sensorLandscape"/g' app/src/main/AndroidManifest.xml
+
+      - name: Build Debug APK with Gradle
+        run: |
+          cd android-build
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Copy & Rename APK
+        run: |
+          cp android-build/app/build/outputs/apk/debug/app-debug.apk Disnakector.apk
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Disnakector-Android-APK
+          path: Disnakector.apk
+
+      - name: Attach APK to GitHub Release v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload v1.0.0 Disnakector.apk --clobber
