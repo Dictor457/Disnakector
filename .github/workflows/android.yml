@@ -82,9 +82,9 @@ jobs:
 
           sed -i "s/abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'/abiFilters 'arm64-v8a'/g" app/build.gradle 2>/dev/null || true
 
-          # Поднимаем versionCode до 3
-          sed -i 's/versionCode [0-9]*/versionCode 3/g' app/build.gradle 2>/dev/null || true
-          sed -i 's/versionName "[^"]*"/versionName "1.0.2"/g' app/build.gradle 2>/dev/null || true
+          # Поднимаем versionCode до 4
+          sed -i 's/versionCode [0-9]*/versionCode 4/g' app/build.gradle 2>/dev/null || true
+          sed -i 's/versionName "[^"]*"/versionName "1.0.3"/g' app/build.gradle 2>/dev/null || true
 
           mkdir -p app/src/main/res/values
           cat << 'STRINGS' > app/src/main/res/values/strings.xml
@@ -93,7 +93,6 @@ jobs:
           </resources>
           STRINGS
 
-          # Жестко блокируем экран в горизонтальной ориентации
           sed -i 's/android:screenOrientation="[^"]*"/android:screenOrientation="sensorLandscape"/g' app/src/main/AndroidManifest.xml
 
           rm -rf app/src/main/res/mipmap-anydpi*
