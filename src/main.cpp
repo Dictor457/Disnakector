@@ -250,7 +250,7 @@ void sound_play_crash() {
 }
 
 // =============================================================================
-// UI Элементы
+// UI Элементы: адаптированы под мышь И сенсорные касания (contains)
 // =============================================================================
 struct Slider {
     SDL_Rect track;
@@ -258,16 +258,18 @@ struct Slider {
     float value;
     bool dragging = false;
 
-    void update(int mx, int my, bool mouse_down) {
-        if (mouse_down) {
-            if (dragging || (mx >= track.x - 12 && mx <= track.x + track.w + 12 &&
-                             my >= track.y - 12 && my <= track.y + track.h + 12)) {
-                dragging = true;
-                value = std::clamp(static_cast<float>(mx - track.x) / track.w, 0.0f, 1.0f);
-            }
-        } else {
-            dragging = false;
-        }
+    bool contains(int x, int y) const {
+        return (x >= track.x - 20 && x <= track.x + track.w + 20 &&
+                my_clamp(y, track.y - 25, track.y + track.h + 25));
+    }
+
+    static bool my_clamp(int val, int low, int high) {
+        return (val >= low && val <= high);
+    }
+
+    void on_touch(int mx) {
+        dragging = true;
+        value = std::clamp(static_cast<float>(mx - track.x) / track.w, 0.0f, 1.0f);
     }
 
     void draw(SDL_Renderer* ren) const {
@@ -300,8 +302,12 @@ struct Button {
     std::string text;
     bool hovered = false;
 
+    bool contains(int x, int y) const {
+        return (x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h);
+    }
+
     void update(int mx, int my) {
-        hovered = (mx >= rect.x && mx <= rect.x + rect.w && my >= rect.y && my <= rect.y + rect.h);
+        hovered = contains(mx, my);
     }
 
     void draw(SDL_Renderer* ren) const {
@@ -484,6 +490,10 @@ struct TouchButton {
     std::string label;
     int dx, dy;
     bool pressed = false;
+
+    bool contains(int x, int y) const {
+        return (x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h);
+    }
 };
 
 static std::vector<TouchButton> g_touch_pad = {
@@ -530,6 +540,11 @@ static void spawn_apple(Apple& apple, const Snake& snake, std::mt19937& rng) {
 int main(int argc, char* argv[]) {
     (void)argc; (void)argv;
 
+    // ВАЖНО: блокируем ориентацию строго в альбомном режиме (Landscape)
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         std::cerr << "[FATAL] SDL_Init: " << SDL_GetError() << "\n";
         return 1;
@@ -542,11 +557,10 @@ int main(int argc, char* argv[]) {
     Uint32 win_flags = SDL_WINDOW_SHOWN;
 
 #if defined(__ANDROID__)
-    // Запрашиваем настоящий физический размер дисплея телефона
     SDL_DisplayMode dm;
-    if (SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.w > 0 && dm.h > 0) {
-        win_w = dm.w;
-        win_h = dm.h;
+    if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
+        win_w = std::max(dm.w, dm.h);
+        win_h = std::min(dm.w, dm.h);
     }
     win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 #endif
@@ -569,7 +583,7 @@ int main(int argc, char* argv[]) {
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
     );
 
-    // Аппаратное масштабирование игрового поля на полный экран любого смартфона
+    // Автоматическое масштабирование и пересчет координат касаний в размер 800x640
     SDL_RenderSetLogicalSize(renderer, SCREEN_WIDTH, SCREEN_HEIGHT);
 
     std::random_device rd;
@@ -652,8 +666,7 @@ int main(int argc, char* argv[]) {
         last_frame_time = frame_start;
 
         int mouse_x, mouse_y;
-        Uint32 mouse_btn = SDL_GetMouseState(&mouse_x, &mouse_y);
-        bool mouse_down = (mouse_btn & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+        SDL_GetMouseState(&mouse_x, &mouse_y);
 
         if (state == GameState::AUDIO_PROMPT) {
             btn_music_yes.update(mouse_x, mouse_y);
@@ -663,18 +676,6 @@ int main(int argc, char* argv[]) {
             btn_settings.update(mouse_x, mouse_y);
             btn_exit.update(mouse_x, mouse_y);
         } else if (state == GameState::SETTINGS) {
-            slider_sfx.update(mouse_x, mouse_y, mouse_down);
-            slider_music.update(mouse_x, mouse_y, mouse_down);
-
-            if (slider_music.dragging) {
-                mascot_phrase = "ЧЕ НОРМАЛЬНЫЙ МУЗОН?";
-            }
-
-            SDL_LockAudioDevice(g_mixer.dev);
-            g_mixer.sfx_volume = slider_sfx.value;
-            g_mixer.music_volume = slider_music.value;
-            SDL_UnlockAudioDevice(g_mixer.dev);
-
             btn_track.update(mouse_x, mouse_y);
             btn_speed.update(mouse_x, mouse_y);
             btn_touch.update(mouse_x, mouse_y);
@@ -692,8 +693,12 @@ int main(int argc, char* argv[]) {
             if (event.type == SDL_QUIT) {
                 running = false;
             } else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+                // Координаты касания пальцем / клика
+                int cx = event.button.x;
+                int cy = event.button.y;
+
                 if (state == GameState::AUDIO_PROMPT) {
-                    if (btn_music_yes.hovered) {
+                    if (btn_music_yes.contains(cx, cy)) {
                         sound_play_click();
                         SDL_LockAudioDevice(g_mixer.dev);
                         g_mixer.music_volume = 0.5f;
@@ -701,7 +706,7 @@ int main(int argc, char* argv[]) {
                         SDL_UnlockAudioDevice(g_mixer.dev);
                         state = GameState::MENU;
                         mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
-                    } else if (btn_music_no.hovered) {
+                    } else if (btn_music_no.contains(cx, cy)) {
                         sound_play_click();
                         SDL_LockAudioDevice(g_mixer.dev);
                         g_mixer.music_volume = 0.0f;
@@ -712,8 +717,7 @@ int main(int argc, char* argv[]) {
                     }
                 } else if (state == GameState::PLAYING && touch_controls_enabled) {
                     for (auto& btn : g_touch_pad) {
-                        if (mouse_x >= btn.rect.x && mouse_x <= btn.rect.x + btn.rect.w &&
-                            mouse_y >= btn.rect.y && mouse_y <= btn.rect.y + btn.rect.h) {
+                        if (btn.contains(cx, cy)) {
                             btn.pressed = true;
                             auto last_dir = safe_input_queue.empty() ? std::make_pair(snake.dx, snake.dy) : safe_input_queue.back();
                             if (btn.dx != -last_dir.first || btn.dy != -last_dir.second) {
@@ -725,35 +729,46 @@ int main(int argc, char* argv[]) {
                         }
                     }
                 } else if (state == GameState::MENU) {
-                    if (btn_play.hovered) {
+                    if (btn_play.contains(cx, cy)) {
                         sound_play_click();
                         reset_game();
                         spawn_apple(apple, snake, rng);
                         state = GameState::PLAYING;
-                    } else if (btn_settings.hovered) {
+                    } else if (btn_settings.contains(cx, cy)) {
                         sound_play_click();
                         state = GameState::SETTINGS;
-                    } else if (btn_exit.hovered) {
+                    } else if (btn_exit.contains(cx, cy)) {
                         sound_play_click();
                         state = GameState::EXIT_CONFIRM;
                         mascot_phrase = "СЕРЬЕЗНО ЛИВАЕШЬ?(";
                     }
                 } else if (state == GameState::EXIT_CONFIRM) {
-                    if (btn_confirm_yes.hovered) {
+                    if (btn_confirm_yes.contains(cx, cy)) {
                         running = false;
-                    } else if (btn_confirm_no.hovered) {
+                    } else if (btn_confirm_no.contains(cx, cy)) {
                         sound_play_click();
                         state = GameState::MENU;
                         mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
                     }
                 } else if (state == GameState::SETTINGS) {
-                    if (btn_track.hovered) {
+                    if (slider_sfx.contains(cx, cy)) {
+                        slider_sfx.on_touch(cx);
+                        SDL_LockAudioDevice(g_mixer.dev);
+                        g_mixer.sfx_volume = slider_sfx.value;
+                        SDL_UnlockAudioDevice(g_mixer.dev);
+                    } else if (slider_music.contains(cx, cy)) {
+                        slider_music.on_touch(cx);
+                        SDL_LockAudioDevice(g_mixer.dev);
+                        g_mixer.music_volume = slider_music.value;
+                        SDL_UnlockAudioDevice(g_mixer.dev);
+                        mascot_phrase = "ЧЕ НОРМАЛЬНЫЙ МУЗОН?";
+                    } else if (btn_track.contains(cx, cy)) {
                         sound_play_click();
                         int next_track = (g_mixer.current_track % 4) + 1;
                         load_track_file(next_track);
                         btn_track.text = "TRACK: " + std::to_string(next_track) + " / 4";
                         mascot_phrase = "ЧЕ НОРМАЛЬНЫЙ МУЗОН?";
-                    } else if (btn_speed.hovered) {
+                    } else if (btn_speed.contains(cx, cy)) {
                         sound_play_click();
                         if (initial_speed == 95) {
                             initial_speed = 70;
@@ -768,28 +783,45 @@ int main(int argc, char* argv[]) {
                             btn_speed.text = "SPEED: NORMAL";
                             mascot_phrase = "НОРМАЛЬНАЯ СЛОЖНОСТЬ - ЗАЕБИСЬ";
                         }
-                    } else if (btn_touch.hovered) {
+                    } else if (btn_touch.contains(cx, cy)) {
                         sound_play_click();
                         touch_controls_enabled = !touch_controls_enabled;
                         btn_touch.text = touch_controls_enabled ? "TOUCH UI: ON" : "TOUCH UI: OFF";
-                    } else if (btn_back.hovered) {
+                    } else if (btn_back.contains(cx, cy)) {
                         sound_play_click();
                         mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
                         state = GameState::MENU;
                     }
                 } else if (state == GameState::GAMEOVER) {
-                    if (btn_restart.hovered) {
+                    if (btn_restart.contains(cx, cy)) {
                         sound_play_click();
                         reset_game();
                         spawn_apple(apple, snake, rng);
                         state = GameState::PLAYING;
-                    } else if (btn_to_menu.hovered) {
+                    } else if (btn_to_menu.contains(cx, cy)) {
                         sound_play_click();
                         mascot_phrase = "САЛАМ! Я ЛЕХМАН)";
                         state = GameState::MENU;
                     }
                 }
+            } else if (event.type == SDL_MOUSEMOTION) {
+                if (state == GameState::SETTINGS) {
+                    if (slider_sfx.dragging) {
+                        slider_sfx.on_touch(event.motion.x);
+                        SDL_LockAudioDevice(g_mixer.dev);
+                        g_mixer.sfx_volume = slider_sfx.value;
+                        SDL_UnlockAudioDevice(g_mixer.dev);
+                    }
+                    if (slider_music.dragging) {
+                        slider_music.on_touch(event.motion.x);
+                        SDL_LockAudioDevice(g_mixer.dev);
+                        g_mixer.music_volume = slider_music.value;
+                        SDL_UnlockAudioDevice(g_mixer.dev);
+                    }
+                }
             } else if (event.type == SDL_MOUSEBUTTONUP) {
+                slider_sfx.dragging = false;
+                slider_music.dragging = false;
                 for (auto& btn : g_touch_pad) btn.pressed = false;
             } else if (event.type == SDL_KEYDOWN) {
                 if (event.key.keysym.sym == SDLK_ESCAPE) {
@@ -986,12 +1018,11 @@ int main(int argc, char* argv[]) {
                 SDL_RenderDrawLine(renderer, tx, ty + 6, tx + 2, ty + 9);
             } else if (visual_look_dy == -1) {
                 SDL_RenderDrawLine(renderer, tx, ty, tx, ty - 6);
-                SDL_RenderDrawLine(renderer, tx, ty - 6, tx - 2, ty - 9);
-                SDL_RenderDrawLine(renderer, tx, ty - 6, tx + 2, ty - 9);
+                SDL_RenderDrawLine(renderer, tx - 6, ty, tx - 2, ty - 9);
+                SDL_RenderDrawLine(renderer, tx - 6, ty, tx + 2, ty - 9);
             }
         }
 
-        // Частицы
         for (const auto& p : particles) {
             SDL_SetRenderDrawColor(renderer, p.r, p.g, p.b, (uint8_t)(p.life * 255.0f));
             SDL_Rect pr{ (int)p.x, (int)p.y, 3, 3 };
